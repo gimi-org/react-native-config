@@ -21,18 +21,14 @@ def getCurrentFlavor() {
     return flavor
 }
 
-def readDotEnv = {
+def loadDotEnv(flavor = getCurrentFlavor()) {
     def envFile = ".env"
 
-    if (project.hasProperty("defaultEnvFile")) {
-        envFile = project.defaultEnvFile
-    }
-
     if (System.env['ENVFILE']) {
-        envFile = System.env['ENVFILE'];
+        envFile = System.env['ENVFILE']
+    } else if (System.getProperty('ENVFILE')) {
+        envFile = System.getProperty('ENVFILE')
     } else if (project.hasProperty("envConfigFiles")) {
-        def flavor = getCurrentFlavor()
-
         // use startsWith because sometimes the task is "generateDebugSources", so we want to match "debug"
         project.ext.envConfigFiles.any { pair ->
             if (flavor.startsWith(pair.key)) {
@@ -40,26 +36,35 @@ def readDotEnv = {
                 return true
             }
         }
+    } else if (project.hasProperty("defaultEnvFile")) {
+        envFile = project.defaultEnvFile
     }
 
     def env = [:]
     println("Reading env from: $envFile")
-    try {
-        new File("$project.rootDir/../$envFile").eachLine { line ->
+
+    File f = new File("$project.rootDir/../$envFile");
+    if (!f.exists()) {
+        f = new File("$envFile");
+    }
+
+    if (f.exists()) {
+        f.eachLine { line ->
             def matcher = (line =~ /^\s*(?:export\s+|)([\w\d\.\-_]+)\s*=\s*['"]?(.*?)?['"]?\s*$/)
-            if (matcher.getCount() == 1 && matcher[0].size() == 3){
-                env.put(matcher[0][1], matcher[0][2])
+            if (matcher.getCount() == 1 && matcher[0].size() == 3) {
+                env.put(matcher[0][1], matcher[0][2].replace('"', '\\"'))
             }
         }
-    } catch (FileNotFoundException ignored) {
+    } else {
         println("**************************")
         println("*** Missing .env file ****")
         println("**************************")
     }
+
     project.ext.set("env", env)
 }
 
-readDotEnv()
+loadDotEnv()
 
 android {
     defaultConfig {
@@ -70,3 +75,26 @@ android {
         }
     }
 }
+
+tasks.whenTaskAdded { task ->
+    if (project.hasProperty("envConfigFiles")) {
+        project.envConfigFiles.each { envConfigName, envConfigFile ->
+            if (task.name.toLowerCase() == "generate"+envConfigName+"buildconfig") {
+                task.doFirst() {
+                    android.applicationVariants.all { variant ->
+                        def variantConfigString = variant.getVariantData().getVariantConfiguration().getFullName()
+                        if (envConfigName.contains(variantConfigString.toLowerCase())) {
+                            loadDotEnv(envConfigName)
+                            project.env.each { k, v ->
+                                def escaped = v.replaceAll("%","\\\\u0025")
+                                variant.buildConfigField "String", k, "\"$v\""
+                                variant.resValue "string", k, "\"$escaped\""
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+

@@ -1,6 +1,11 @@
 #!/usr/bin/env ruby
 
-require "json"
+# Allow utf-8 charactor in config value
+# For example, APP_NAME=中文字符
+Encoding.default_external = Encoding::UTF_8
+Encoding.default_internal = Encoding::UTF_8
+
+defaultEnvFile = ".env"
 
 # pick a custom env file if set
 if File.exists?("/tmp/envfile")
@@ -8,7 +13,7 @@ if File.exists?("/tmp/envfile")
   file = File.read("/tmp/envfile").strip
 else
   custom_env = false
-  file = ENV["ENVFILE"] || ".env"
+  file = ENV["ENVFILE"] || defaultEnvFile
 end
 
 puts "Reading env from #{file}"
@@ -16,8 +21,25 @@ puts "Reading env from #{file}"
 dotenv = begin
   # https://regex101.com/r/cbm5Tp/1
   dotenv_pattern = /^(?:export\s+|)(?<key>[[:alnum:]_]+)=((?<quote>["'])?(?<val>.*?[^\\])\k<quote>?|)$/
+
   # find that above node_modules/react-native-config/ios/
-  raw = File.read(File.join(Dir.pwd, "../../../#{file}"))
+  path = File.join(Dir.pwd, "../../../#{file}")
+  if File.exists?(path)
+    raw = File.read(path)
+  elsif File.exists?(file)
+    raw = File.read(file)
+  else
+    defaultEnvPath = File.join(Dir.pwd, "../../../#{defaultEnvFile}")
+    if !File.exists?(defaultEnvPath)
+      # try as absolute path
+      defaultEnvPath = defaultEnvFile
+    end
+    defaultRaw = File.read(defaultEnvPath)
+    if (defaultRaw)
+      raw = defaultRaw + "\n" + raw
+    end
+  end
+
   raw.split("\n").inject({}) do |h, line|
     m = line.match(dotenv_pattern)
     next h if m.nil?
@@ -34,7 +56,7 @@ rescue Errno::ENOENT
 end
 
 # create obj file that sets DOT_ENV as a NSDictionary
-dotenv_objc = dotenv.map { |k, v| %Q(@"#{k}":@"#{v}") }.join(",")
+dotenv_objc = dotenv.map { |k, v| %Q(@"#{k}":@"#{v.chomp}") }.join(",")
 template = <<EOF
   #define DOT_ENV @{ #{dotenv_objc} };
 EOF
